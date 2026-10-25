@@ -1,1 +1,58 @@
+name: atus-data2
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: American Time Use Survey annual averages by activity (BLS flat files, filtered)
+        continue-on-error: true
+        run: |
+          mkdir -p out data/zips
+          cat > a.py <<'PY'
+          import time, urllib.request
+          UA = {"User-Agent": "KAIM Research info@kaimresearch.com", "Accept-Encoding": "identity"}
+          log = open("out/log.txt", "w")
+          base = "https://download.bls.gov/pub/time.series/tu/"
+          def get(name, tries=3, timeout=600):
+              err = ""
+              for a in range(tries):
+                  try:
+                      return urllib.request.urlopen(urllib.request.Request(base + name, headers=UA), timeout=timeout)
+                  except Exception as e:
+                      err = repr(e)[:120]; time.sleep(8 * (a + 1))
+              log.write("%s ERROR %s\n" % (name, err)); log.flush(); return None
+          for n in ["tu.actcode", "tu.contacts", "tu.footnote", "tu.period", "tu.stattype", "tu.sex", "tu.lfstat", "tu.pertype", "tu.datays", "tu.series.txt"]:
+              r = get(n)
+              if r is None: continue
+              d = r.read(); open("out/" + n, "wb").write(d); log.write("%s len=%d\n" % (n, len(d))); log.flush(); time.sleep(1)
+          # big files: stream and keep only series whose id starts with TUU10101AA01 (average hours per day, all people)
+          for n in ["tu.series", "tu.data.1.AllData"]:
+              r = get(n)
+              if r is None: continue
+              kept = 0; first = True
+              with open("out/" + n + ".filtered", "wb") as f:
+                  for line in r:
+                      if first or line.startswith(b"TUU10101AA01"):
+                          f.write(line); kept += 1; first = False
+              log.write("%s kept %d lines\n" % (n, kept)); log.flush()
+          PY
+          python3 a.py
+          cat out/log.txt
+      - name: Zip and commit
+        if: always()
+        run: |
+          cd out && zip -r ../data/zips/atus-data2.zip . && cd ..
+          git config user.name "github-actions"; git config user.email "actions@users.noreply.github.com"
+          git add data/zips/atus-data2.zip
+          git commit -m "Fetch ATUS annual averages" || true
+          git push || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: atus-data2
+          path: out/
 
