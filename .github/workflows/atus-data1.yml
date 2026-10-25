@@ -1,1 +1,55 @@
+name: atus-data1
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: American Time Use Survey time series (BLS flat files)
+        continue-on-error: true
+        run: |
+          mkdir -p out data/zips
+          cat > a.py <<'PY'
+          import re, time, urllib.request
+          UA = {"User-Agent": "KAIM Research info@kaimresearch.com", "Accept-Encoding": "identity"}
+          log = open("out/log.txt", "w")
+          def get(url, tries=3, timeout=300):
+              err = ""
+              for a in range(tries):
+                  try:
+                      return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout).read()
+                  except Exception as e:
+                      err = repr(e)[:120]; time.sleep(8 * (a + 1))
+              return ("ERROR " + err).encode()
+          base = "https://download.bls.gov/pub/time.series/tu/"
+          idx = get(base)
+          open("out/index.html", "wb").write(idx); log.write("index len=%d\n" % len(idx)); log.flush()
+          names = sorted(set(re.findall(r'href="[^"]*/(tu\.[A-Za-z0-9_.]+)"', idx.decode("utf-8", "replace"))))
+          log.write("files: %s\n" % names); log.flush()
+          for n in names:
+              if n.startswith("tu.data."):
+                  d = get(base + n, timeout=600)
+                  if len(d) > 90_000_000: log.write("%s skipped, %d bytes\n" % (n, len(d))); continue
+              else:
+                  d = get(base + n)
+              open("out/" + n, "wb").write(d); log.write("%s len=%d\n" % (n, len(d))); log.flush(); time.sleep(2)
+          PY
+          python3 a.py
+          cat out/log.txt | cut -c1-300
+      - name: Zip and commit
+        if: always()
+        run: |
+          cd out && zip -r ../data/zips/atus-data1.zip . && cd ..
+          git config user.name "github-actions"; git config user.email "actions@users.noreply.github.com"
+          git add data/zips/atus-data1.zip
+          git commit -m "Fetch ATUS time series" || true
+          git push || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: atus-data1
+          path: out/
 
